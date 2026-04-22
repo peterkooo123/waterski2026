@@ -133,7 +133,7 @@ df_mesiac = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.star
 
 if not df_mesiac.empty:
     sumar_df = df_mesiac.groupby("Meno")[["Počet", "Litre"]].sum().sort_values(by="Počet", ascending=False).reset_index()
-    st.subheader(f"🏆 Králi mesiaca ({zvoleny_mesiac_str})")
+    st.subheader(f"🏆 Najviac odlyžované ({zvoleny_mesiac_str})")
     
     top_3 = sumar_df.head(3)
     p = [top_3.iloc[i] if i < len(top_3) else None for i in range(3)]

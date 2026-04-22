@@ -5,13 +5,13 @@ import os
 
 # --- KONFIGURÁCIA ---
 DB_FILE = "lyziari_data.csv"
-NAMES_FILE = "zoznam_mien.txt"
+NAMES_FILE = "Zoznam_mien.txt"
 
-st.set_page_config(page_title="Ski Evidence 2026", layout="wide", page_icon="⛷️")
+st.set_page_config(page_title="Minúty 2026", layout="wide", page_icon="⛷️")
 
 def load_names():
     if not os.path.exists(NAMES_FILE):
-        return ["Peter", "Jana", "Michal"]
+        return ["Peter", "Zuzka", "Sofia"]
     with open(NAMES_FILE, "r", encoding="utf-8") as f:
         return sorted(list(set([line.strip() for line in f.readlines()])))
 

@@ -7,7 +7,7 @@ import os
 DB_FILE = "lyziari_data.csv"
 NAMES_FILE = "Zoznam_mien.txt"
 
-st.set_page_config(page_title="Minúty 2026", layout="wide", page_icon="⛷️")
+st.set_page_config(page_title="🏄Minúty 2026", layout="wide", page_icon="⛷️")
 
 def load_names():
     if not os.path.exists(NAMES_FILE):
@@ -46,7 +46,7 @@ if 'zvoleny_datum' not in st.session_state:
 
 zoznam_mien = load_names()
 
-st.title("⛷️ Minúty 2026")
+st.title("🏄 Minúty 2026")
 
 # --- FORMULÁR PRE NOVÝ ZÁPIS ---
 with st.container(border=True):

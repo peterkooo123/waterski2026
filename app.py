@@ -93,14 +93,14 @@ else:
 st.divider()
 df_mesiac = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(zvoleny_mesiac_str)]
 if not df_mesiac.empty:
-    sumar_df = df_mesiac.groupby("Meno")[["Počet Minút", "Litre"]].sum().sort_values(by="Počet Minút", ascending=False).reset_index()
+    sumar_df = df_mesiac.groupby("Meno")[["Počet", "Litre"]].sum().sort_values(by="Počet", ascending=False).reset_index()
     st.subheader("🏆 Králi mesiaca")
     top_3 = sumar_df.head(3)
     
     # Dynamické podium
     p = [top_3.iloc[i] if i < len(top_3) else None for i in range(3)]
     names = [x['Meno'] if x is not None else "" for x in p]
-    mins = [int(x['Počet Minút']) if x is not None else 0 for x in p]
+    mins = [int(x['Počet']) if x is not None else 0 for x in p]
 
     podium_html = f"""
     <div style="display: flex; align-items: flex-end; justify-content: center; height: 160px; font-family: sans-serif;">

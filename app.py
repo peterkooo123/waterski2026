@@ -35,7 +35,7 @@ if 'zvoleny_datum' not in st.session_state:
 
 zoznam_mien = load_names()
 
-st.title("⛷️ Ski Evidence 2026")
+st.title("Minúty 2026")
 
 # --- FORMULÁR ---
 with st.container(border=True):

@@ -80,7 +80,7 @@ zvoleny_mesiac_str = st.session_state.zvoleny_datum.strftime("%Y-%m")
 display_df = st.session_state.df_logs[st.session_state.df_logs["Dátum"] == str_datum].copy()
 if not display_df.empty:
     display_df["Zmazať"] = False
-    edited_df = st.data_editor(display_df[["Čas", "Meno", "Hodnota Počítadla", "Počet Minút", "Litre", "Zmazať"]], use_container_width=True, hide_index=True)
+    edited_df = st.data_editor(display_df[["Čas", "Meno", "Hodnota", "Počet", "Litre", "Zmazať"]], use_container_width=True, hide_index=True)
     if any(edited_df["Zmazať"]):
         if st.button("🔥 POTVRDIŤ VYMAZANIE", type="primary", use_container_width=True):
             st.session_state.df_logs = st.session_state.df_logs.drop(edited_df.index[edited_df["Zmazať"]])

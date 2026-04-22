@@ -21,21 +21,16 @@ def save_new_name(new_name):
             f.write(new_name.strip() + "\n")
 
 def get_data():
-    # Definujeme stĺpce tak, ako ich chceš mať v apke
     cols = ["ID", "Dátum", "Čas", "Meno", "Hodnota", "Počet", "Litre"]
     if not os.path.exists(DB_FILE):
         return pd.DataFrame(columns=cols)
     
     df = pd.read_csv(DB_FILE)
     
-    # Ak má staré CSV dlhé názvy, premenujeme ich na krátke
-    rename_map = {
-        "Hodnota Počítadla": "Hodnota",
-        "Počet Minút": "Počet"
-    }
+    # Premenovanie starých názvov na nové, ak existujú
+    rename_map = {"Hodnota Počítadla": "Hodnota", "Počet Minút": "Počet"}
     df = df.rename(columns=rename_map)
     
-    # Uistíme sa, že máme všetky potrebné stĺpce
     for c in cols:
         if c not in df.columns:
             df[c] = 0
@@ -53,7 +48,7 @@ zoznam_mien = load_names()
 
 st.title("⛷️ Minúty 2026")
 
-# --- FORMULÁR ---
+# --- FORMULÁR PRE NOVÝ ZÁPIS ---
 with st.container(border=True):
     st.subheader("➕ Nový záznam")
     col1, col2 = st.columns([1, 1])
@@ -61,7 +56,8 @@ with st.container(border=True):
         vyber = st.selectbox("Meno lyžiara", ["---"] + zoznam_mien + ["+ Nové meno"])
         meno = st.text_input("Zadaj meno nového lyžiara") if vyber == "+ Nové meno" else vyber
     with col2:
-        aktualna_hodnota = st.number_input("Počítadlo (3 miesta)", 0, 999, step=1)
+        # Ponechávame "Počítadlo" ako názov v poli, ale ukladáme do stĺpca "Hodnota"
+        aktualna_hodnota = st.number_input("Stav počítadla (3 miesta)", 0, 999, step=1)
     
     col3, col4 = st.columns([1, 1])
     with col3:
@@ -77,7 +73,7 @@ with st.container(border=True):
             if vyber == "+ Nové meno": 
                 save_new_name(final_name)
             
-            # Logika výpočtu
+            # Výpočet rozdielu (minút) oproti poslednému záznamu v pamäti
             if not st.session_state.df_logs.empty:
                 posledna_hodnota = int(st.session_state.df_logs.iloc[-1]["Hodnota"])
                 if aktualna_hodnota < posledna_hodnota:
@@ -102,7 +98,7 @@ with st.container(border=True):
             st.success(f"Uložené: {rozdiel} minút")
             st.rerun()
 
-# --- HISTÓRIA ---
+# --- HISTÓRIA (Najnovšie hore) ---
 st.divider()
 st.session_state.zvoleny_datum = st.date_input("Zobraziť deň:", st.session_state.zvoleny_datum, key="calendar")
 str_datum = st.session_state.zvoleny_datum.strftime("%Y-%m-%d")
@@ -111,8 +107,10 @@ zvoleny_mesiac_str = st.session_state.zvoleny_datum.strftime("%Y-%m")
 display_df = st.session_state.df_logs[st.session_state.df_logs["Dátum"] == str_datum].copy()
 
 if not display_df.empty:
+    # --- TÁTO ČASŤ ZABEZPEČÍ NAJNOVŠIE HORE ---
+    display_df = display_df.sort_values(by="ID", ascending=False)
+    
     display_df["Zmazať"] = False
-    # Tu už používame nové názvy "Hodnota" a "Počet"
     edited_df = st.data_editor(
         display_df[["Čas", "Meno", "Hodnota", "Počet", "Litre", "Zmazať"]], 
         use_container_width=True, 
@@ -122,7 +120,6 @@ if not display_df.empty:
     
     if any(edited_df["Zmazať"]):
         if st.button("🔥 POTVRDIŤ VYMAZANIE", type="primary", use_container_width=True):
-            # Musíme mazať podľa indexu pôvodného DataFrame
             to_drop = edited_df.index[edited_df["Zmazať"]]
             st.session_state.df_logs = st.session_state.df_logs.drop(to_drop)
             st.session_state.df_logs.to_csv(DB_FILE, index=False)
@@ -130,7 +127,7 @@ if not display_df.empty:
 else:
     st.info("Žiadne záznamy pre tento deň.")
 
-# --- SUMÁR A PODIUM ---
+# --- SUMÁR A STUPIENOK VÍŤAZOV ---
 st.divider()
 df_mesiac = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(zvoleny_mesiac_str)]
 
@@ -155,17 +152,5 @@ if not df_mesiac.empty:
 # --- EXPORT (Sidebar) ---
 with st.sidebar:
     st.header("📥 Export")
-    st.download_button(
-        f"Stiahnuť {zvoleny_mesiac_str}", 
-        df_mesiac.to_csv(index=False).encode('utf-8'), 
-        f"export_{zvoleny_mesiac_str}.csv", 
-        "text/csv", 
-        use_container_width=True
-    )
-    st.download_button(
-        "Stiahnuť VŠETKO (Záloha)", 
-        st.session_state.df_logs.to_csv(index=False).encode('utf-8'), 
-        "zaloha.csv", 
-        "text/csv", 
-        use_container_width=True
-    )
+    st.download_button(f"Stiahnuť {zvoleny_mesiac_str}", df_mesiac.to_csv(index=False).encode('utf-8'), f"export_{zvoleny_mesiac_str}.csv", "text/csv", use_container_width=True)
+    st.download_button("Stiahnuť VŠETKO (Záloha)", st.session_state.df_logs.to_csv(index=False).encode('utf-8'), "zaloha.csv", "text/csv", use_container_width=True)

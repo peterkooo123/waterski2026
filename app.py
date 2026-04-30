@@ -160,6 +160,17 @@ if not df_m.empty:
     st.subheader(f"🏆 Sumár za mesiac {z_mes}")
     st.table(sum_df)
 
+# ROČNÝ SUMÁR
+with col_y:
+    z_rok = "2026"
+    df_y = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_rok)]
+    st.subheader(f"🗓️ Rok {z_rok}")
+    if not df_y.empty:
+        sum_y = df_y.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
+        st.write("📊 **Celkové poradie**")
+        st.table(sum_y)
+    else: st.write("Žiadne dáta.")
+
 with st.sidebar:
     st.header("📥 Export")
     st.download_button("Export CSV", st.session_state.df_logs.to_csv(index=False).encode('utf-8'), "lyziari.csv", "text/csv")

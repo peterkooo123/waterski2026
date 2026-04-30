@@ -28,31 +28,27 @@ def get_data():
     df = pd.read_csv(DB_FILE)
     df["Dátum"] = df["Dátum"].astype(str)
     df["Hodnota"] = pd.to_numeric(df["Hodnota"], errors='coerce').fillna(0).astype(int)
+    # Vrátiť len stĺpce, ktoré reálne existujú v zozname cols
     return df[[c for c in cols if c in df.columns]]
 
-# --- LOGIKA PRE RADENIE A PREPOČET (S PRETEČENÍM) ---
+# --- LOGIKA PRE RADENIE A PREPOČET ---
 def recalculate_logic(df):
     if df.empty:
         return df
     
-    # Pomocná funkcia na zoradenie v rámci dňa, ktorá berie do úvahy pretečenie
+    # Pomocná funkcia na smart zoradenie v rámci dňa
     def smart_sort(group):
         group = group.sort_values("Hodnota").reset_index(drop=True)
-        # Hľadáme bod zlomu: vysoká hodnota (>900) nasledovaná nízkou (<100)
         break_point = -1
         for i in range(1, len(group)):
             if group.at[i-1, "Hodnota"] > 900 and group.at[i, "Hodnota"] < 100:
                 break_point = i
                 break
-        
         if break_point != -1:
-            # Ak nastal skok, časť od skoku dáme na koniec
-            part1 = group.iloc[:break_point]
-            part2 = group.iloc[break_point:]
-            return pd.concat([part1, part2])
+            return pd.concat([group.iloc[:break_point], group.iloc[break_point:]])
         return group
 
-    # Najprv zoradíme podľa dátumu, potom aplikujeme smart_sort na každý deň
+    # Zoradenie a reset indexu, aby sme sa vyhli KeyError
     df = df.groupby("Dátum", group_keys=False).apply(smart_sort).reset_index(drop=True)
     
     new_counts = []
@@ -60,11 +56,11 @@ def recalculate_logic(df):
         if i == 0:
             new_counts.append(0)
         else:
-            aktualna = int(df.at[i, "Hodnota"])
-            predchadzajuca = int(df.at[i-1, "Hodnota"])
+            # Bezpečný prístup cez .iloc aby sme sa vyhli problémom s indexmi
+            aktualna = int(df.iloc[i]["Hodnota"])
+            predchadzajuca = int(df.iloc[i-1]["Hodnota"])
             
-            # Ak je rovnaký dátum, rátame rozdiel
-            if df.at[i, "Dátum"] == df.at[i-1, "Dátum"]:
+            if df.iloc[i]["Dátum"] == df.iloc[i-1]["Dátum"]:
                 if aktualna < predchadzajuca:
                     if predchadzajuca > 900 and aktualna < 100:
                         rozdiel = (1000 - predchadzajuca) + aktualna
@@ -73,8 +69,7 @@ def recalculate_logic(df):
                 else:
                     rozdiel = aktualna - predchadzajuca
             else:
-                rozdiel = 0 # Prvý záznam dňa nepočíta minúty od predchádzajúceho dňa
-                
+                rozdiel = 0
             new_counts.append(rozdiel)
             
     df["Počet"] = new_counts
@@ -88,6 +83,8 @@ if 'form_reset_key' not in st.session_state:
     st.session_state.form_reset_key = 0
 
 def reset_and_save(df):
+    # Pred prepočtom preistotu pretypujeme a vyčistíme index
+    df = df.reset_index(drop=True)
     df = recalculate_logic(df)
     df.to_csv(DB_FILE, index=False)
     st.session_state.df_logs = df
@@ -131,21 +128,29 @@ zvoleny_den = st.date_input("Zobraziť deň:", date.today())
 s_datum = zvoleny_den.strftime("%Y-%m-%d")
 
 f_df = st.session_state.df_logs.copy()
-# Pre históriu radíme od najnovšieho (spodok tabuľky je navrchu)
+# Radíme podľa dátumu a následne ID, aby sa zachovalo poradie zápisov
 f_df = f_df.sort_values(by=["Dátum", "ID"], ascending=[False, False])
 f_df["Zmazať"] = False
 
 mask = f_df["Dátum"] == s_datum
 if not f_df[mask].empty:
+    # Tu zobrazujeme tabuľku pre konkrétny deň
+    current_day_data = f_df[mask].copy()
     ed_df = st.data_editor(
-        f_df[mask][["Meno", "Hodnota", "Počet", "Litre", "Zmazať"]],
+        current_day_data[["Meno", "Hodnota", "Počet", "Litre", "Zmazať"]],
         use_container_width=True, hide_index=True,
         column_config={"Hodnota": st.column_config.NumberColumn(format="%03d")}
     )
+    
     if st.button("💾 ULOŽIŤ ZMENY"):
         ostatne = f_df[~mask].drop(columns=["Zmazať"])
+        # Pri upravených dátach musíme vrátiť stĺpec Dátum, ktorý editor nezobrazoval
         upravene = ed_df[ed_df["Zmazať"] == False].drop(columns=["Zmazať"])
         upravene["Dátum"] = s_datum
+        # Pridáme ID ak chýba (pri nových riadkoch)
+        if "ID" not in upravene.columns:
+            upravene["ID"] = [int(datetime.now().timestamp()) + i for i in range(len(upravene))]
+        
         reset_and_save(pd.concat([ostatne, upravene], ignore_index=True))
 else:
     st.info("Žiadne dáta pre tento deň.")
@@ -157,23 +162,33 @@ col_m, col_y = st.columns(2)
 # MESAČNÝ SUMÁR
 with col_m:
     z_mes = zvoleny_den.strftime("%Y-%m")
-    df_m = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_mes)]
+    df_m = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_mes)].copy()
     st.subheader(f"📅 Mesiac {z_mes}")
     if not df_m.empty:
         sum_m = df_m.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
         
         # Stupeň víťazov
+        st.write("🏆 **Stupeň víťazov**")
+        v_cols = st.columns(3)
+        medals = ["🥇", "🥈", "🥉"]
+        for i, row in sum_m.head(3).iterrows():
+            with v_cols[i]:
+                st.metric(label=f"{medals[i]} {row['Meno']}", value=f"{row['Počet']} min")
         
+        # Index od 1
+        sum_m.index = sum_m.index + 1
         st.table(sum_m)
     else: st.write("Žiadne dáta.")
 
 # ROČNÝ SUMÁR
 with col_y:
     z_rok = "2026"
-    df_y = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_rok)]
+    df_y = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_rok)].copy()
     st.subheader(f"🗓️ Rok {z_rok}")
     if not df_y.empty:
         sum_y = df_y.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
+        # Index od 1
+        sum_y.index = sum_y.index + 1
         st.write("📊 **Celkové poradie**")
         st.table(sum_y)
     else: st.write("Žiadne dáta.")

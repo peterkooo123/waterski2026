@@ -167,13 +167,6 @@ with col_m:
     if not df_m.empty:
         sum_m = df_m.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
         
-        # Stupeň víťazov
-        st.write("🏆 **Stupeň víťazov**")
-        v_cols = st.columns(3)
-        medals = ["🥇", "🥈", "🥉"]
-        for i, row in sum_m.head(3).iterrows():
-            with v_cols[i]:
-                st.metric(label=f"{medals[i]} {row['Meno']}", value=f"{row['Počet']} min")
         
         # Index od 1
         sum_m.index = sum_m.index + 1

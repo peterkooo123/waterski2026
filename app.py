@@ -27,17 +27,30 @@ def get_data():
         return pd.DataFrame(columns=cols)
     df = pd.read_csv(DB_FILE)
     df["Dátum"] = df["Dátum"].astype(str)
-    df["Hodnota"] = df["Hodnota"].astype(int)
+    df["Hodnota"] = pd.to_numeric(df["Hodnota"], errors='coerce').fillna(0).astype(int)
     return df[cols]
 
-# --- EXPERIMENTÁLNY MOTOR: RADENIE PODĽA HODNOTY ---
-def recalculate_by_value(df):
+# --- UPRAVENÝ MOTOR: RADENIE A PREPOČET (3-CIFERNÉ + PRETOČENIE) ---
+def recalculate_all_logic(df):
     if df.empty:
         return df
     
-    # 1. Zoradenie: Prvoradý je Dátum, druhoradá je Hodnota počítadla
-    # Týmto sa záznam automaticky zaradí medzi ostatné podľa čísla
-    df = df.sort_values(by=["Dátum", "Hodnota"]).reset_index(drop=True)
+    # 1. Funkcia na správne zoradenie v rámci jedného dňa
+    def sort_day_group(group):
+        high_vals = group[group["Hodnota"] > 900]
+        low_vals = group[group["Hodnota"] < 100]
+        
+        # Ak je v jeden deň záznam nad 900 aj pod 100, ide o pretočenie
+        if not high_vals.empty and not low_vals.empty:
+            # Rozdelíme na časť pred pretočením a po pretočení
+            part1 = group[group["Hodnota"] >= 100].sort_values(by="Hodnota")
+            part2 = group[group["Hodnota"] < 100].sort_values(by="Hodnota")
+            return pd.concat([part1, part2])
+        else:
+            return group.sort_values(by="Hodnota")
+
+    # Zoradenie podľa dátumu a následne inteligentne podľa hodnoty v rámci dňa
+    df = df.groupby("Dátum", group_keys=False).apply(sort_day_group).reset_index(drop=True)
     
     # 2. Prepočet minút v novom poradí
     new_counts = []
@@ -49,9 +62,13 @@ def recalculate_by_value(df):
             predchadzajuca = int(df.at[i-1, "Hodnota"])
             
             rozdiel = aktualna - predchadzajuca
-            # Ak je rozdiel záporný, predpokladáme, že počítadlo "pretieklo" cez 9999
-            if rozdiel < 0:
-                rozdiel += 10000
+            
+            # ŠPECIÁLNE PRAVIDLO PRETOČENIA: z >900 na <100
+            if predchadzajuca > 900 and aktualna < 100:
+                rozdiel = (1000 - predchadzajuca) + aktualna
+            elif rozdiel < 0:
+                rozdiel = 0 # Ošetrenie chýb (napr. niekto zadal nižšie číslo omylom)
+                
             new_counts.append(rozdiel)
             
     df["Počet"] = new_counts
@@ -65,7 +82,7 @@ if 'form_reset_key' not in st.session_state:
     st.session_state.form_reset_key = 0
 
 def reset_and_save(df):
-    df = recalculate_by_value(df)
+    df = recalculate_all_logic(df)
     df.to_csv(DB_FILE, index=False)
     st.session_state.df_logs = df
     st.session_state.form_reset_key += 1
@@ -99,8 +116,8 @@ with st.container(border=True):
     
     col3, col4 = st.columns(2)
     with col3:
-        # Tu zadávaš hodnotu, ktorá určí poradie v histórii
-        hodnota = st.number_input("Stav počítadla (4 miesta)", 0, 9999, step=1, key=f"v_{k}")
+        # ZMENA: Limit na 3 miesta (0-999)
+        hodnota = st.number_input("Stav počítadla (3 miesta)", 0, 999, step=1, key=f"v_{k}")
     with col4:
         st.write("⛽ Tankovanie")
         t20 = st.checkbox("20 L", key=f"t20_{k}")
@@ -124,32 +141,32 @@ with st.container(border=True):
 
 # --- HISTÓRIA (Zoradená podľa počítadla) ---
 st.divider()
-st.subheader("🕒 História (podľa počítadla)")
+st.subheader("🕒 História dňa")
 
 zvoleny_den = st.date_input("Zobraziť deň:", date.today())
 s_datum = zvoleny_den.strftime("%Y-%m-%d")
 
+# Zobrazenie v poradí, v akom sú dáta v DF (už správne zoradené motorom)
 full_df = st.session_state.df_logs.copy()
-# Pre zobrazenie v histórii chceme najvyššie čísla (najnovšie jazdy) hore
-full_df = full_df.sort_values(by=["Dátum", "Hodnota"], ascending=[False, False])
 full_df["Zmazať"] = False
 
 mask = full_df["Dátum"] == s_datum
 if not full_df[mask].empty:
+    # V zobrazení otočíme poradie (najnovšie hore), aby sa lepšie čítalo
+    view_df = full_df[mask].iloc[::-1]
+    
     ed_df = st.data_editor(
-        full_df[mask][["Hodnota", "Meno", "Počet", "Litre", "Čas", "Zmazať"]],
+        view_df[["Hodnota", "Meno", "Počet", "Litre", "Čas", "Zmazať"]],
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic"
     )
     
     if st.button("💾 ULOŽIŤ ZMENY A PREPOČÍTAŤ"):
-        # Spojenie upravených dát s ostatnými dňami
         ostatne = full_df[~mask].drop(columns=["Zmazať"])
         upravene = ed_df[ed_df["Zmazať"] == False].drop(columns=["Zmazať"])
         upravene["Dátum"] = s_datum
         
-        # Ak niekto pridal riadok v tabuľke, doplníme ID a Čas
         for idx in upravene.index:
             if "Čas" not in upravene.columns or pd.isnull(upravene.at[idx, "Čas"]):
                 upravene.at[idx, "Čas"] = datetime.now().strftime("%H:%M")
@@ -160,7 +177,7 @@ if not full_df[mask].empty:
 else:
     st.info("Žiadne dáta.")
 
-# --- PODIUM ---
+# --- SUMÁR ---
 z_mesiac = zvoleny_den.strftime("%Y-%m")
 df_m = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_mesiac)]
 if not df_m.empty:

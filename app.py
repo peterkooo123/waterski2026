@@ -25,28 +25,35 @@ def get_data():
     cols = ["ID", "Dátum", "Meno", "Hodnota", "Počet", "Litre"]
     if not os.path.exists(DB_FILE):
         return pd.DataFrame(columns=cols)
-    df = pd.read_csv(DB_FILE)
-    df["Dátum"] = df["Dátum"].astype(str)
-    df["Hodnota"] = pd.to_numeric(df["Hodnota"], errors='coerce').fillna(0).astype(int)
-    # Zabezpečíme, aby sme mali všetky stĺpce
-    for c in cols:
-        if c not in df.columns:
-            df[c] = 0 if c in ["Hodnota", "Počet", "Litre", "ID"] else ""
-    return df[cols]
+    
+    try:
+        df = pd.read_csv(DB_FILE)
+        # Ak je súbor prázdny alebo poškodený (nemá stĺpce)
+        if df.empty or "Dátum" not in df.columns:
+            return pd.DataFrame(columns=cols)
+            
+        df["Dátum"] = df["Dátum"].astype(str)
+        df["Hodnota"] = pd.to_numeric(df["Hodnota"], errors='coerce').fillna(0).astype(int)
+        
+        # Zabezpečíme, aby vrátený DataFrame mal presne naše stĺpce
+        for c in cols:
+            if c not in df.columns:
+                df[c] = 0 if c in ["Hodnota", "Počet", "Litre", "ID"] else ""
+        return df[cols]
+    except Exception:
+        # Ak sa čítanie úplne nepodarí, vrátime prázdnu tabuľku
+        return pd.DataFrame(columns=cols)
 
-# --- TOTÁLNE STABILNÁ LOGIKA PREPOČTU ---
+# --- LOGIKA PREPOČTU (Zoznamy pre maximálnu stabilitu) ---
 def recalculate_logic(df):
     if df.empty:
         return df
     
-    # 1. Reset indexu a zoradenie
     df = df.reset_index(drop=True)
     
-    # Smart zoradenie v rámci dňa
     def smart_sort_day(group):
         group = group.sort_values("Hodnota").reset_index(drop=True)
         break_point = -1
-        # Hľadáme skok (napr. 990 -> 010)
         for i in range(1, len(group)):
             if group.loc[i-1, "Hodnota"] > 900 and group.loc[i, "Hodnota"] < 100:
                 break_point = i
@@ -57,31 +64,26 @@ def recalculate_logic(df):
 
     df = df.groupby("Dátum", group_keys=False).apply(smart_sort_day).reset_index(drop=True)
     
-    # 2. Výpočet pomocou listov (predchádza KeyError 'Dátum')
-    datumi = df["Dátum"].tolist()
-    hodnoty = df["Hodnota"].tolist()
-    novy_pocet = [0] * len(df)
+    # Prístup cez zoznamy (listy), aby nevznikal KeyError pri prechádzaní riadkov
+    dats = df["Dátum"].tolist()
+    hods = df["Hodnota"].tolist()
+    counts = [0] * len(df)
     
     for i in range(1, len(df)):
-        # Ak je rovnaký deň ako predchádzajúci riadok
-        if datumi[i] == datumi[i-1]:
-            akt = hodnoty[i]
-            pre = hodnoty[i-1]
-            
-            if akt < pre:
-                # Ošetrenie pretečenia počítadla
-                if pre > 900 and akt < 100:
-                    rozdiel = (1000 - pre) + akt
+        if dats[i] == dats[i-1]:
+            curr, prev = int(hods[i]), int(hods[i-1])
+            if curr < prev:
+                if prev > 900 and curr < 100:
+                    rozdiel = (1000 - prev) + curr
                 else:
                     rozdiel = 0
             else:
-                rozdiel = akt - pre
-            
-            novy_pocet[i] = rozdiel
+                rozdiel = curr - prev
+            counts[i] = rozdiel
         else:
-            novy_pocet[i] = 0
+            counts[i] = 0
             
-    df["Počet"] = novy_pocet
+    df["Počet"] = counts
     return df
 
 # --- INICIALIZÁCIA ---
@@ -140,7 +142,6 @@ day_data = f_df[mask].copy()
 
 if not day_data.empty:
     day_data["Zmazať"] = False
-    # Zoradíme podľa ID (času zápisu)
     day_data = day_data.sort_values("ID")
     
     ed_df = st.data_editor(
@@ -151,7 +152,7 @@ if not day_data.empty:
             "ID": None, 
             "Hodnota": st.column_config.NumberColumn(format="%03d")
         },
-        key=f"editor_{s_datum}"
+        key=f"ed_{s_datum}"
     )
     
     if st.button("💾 ULOŽIŤ ZMENY"):
@@ -159,7 +160,6 @@ if not day_data.empty:
         upravene = ed_df[ed_df["Zmazať"] == False].copy()
         upravene = upravene.drop(columns=["Zmazať"])
         upravene["Dátum"] = s_datum
-        
         reset_and_save(pd.concat([ostatne, upravene], ignore_index=True))
 else:
     st.info("Žiadne dáta pre tento deň.")
@@ -175,7 +175,13 @@ with col_m:
     if not df_m.empty:
         sum_m = df_m.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
         sum_m.index = sum_m.index + 1
-       
+        st.write("🏆 **Stupeň víťazov**")
+        v_cols = st.columns(3)
+        medals = ["🥇", "🥈", "🥉"]
+        # Opravené zobrazenie medailí (reset indexu pre správne poradie)
+        for i, row in sum_m.head(3).reset_index(drop=True).iterrows():
+            with v_cols[i]:
+                st.metric(label=f"{medals[i]} {row['Meno']}", value=f"{row['Počet']} min")
         st.table(sum_m)
     else: st.write("Žiadne dáta.")
 

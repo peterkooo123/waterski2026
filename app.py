@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, time
 import os
 
 # --- KONFIGURÁCIA ---
@@ -27,37 +27,44 @@ def get_data():
         return pd.DataFrame(columns=cols)
     df = pd.read_csv(DB_FILE)
     df["Dátum"] = df["Dátum"].astype(str)
-    df["Hodnota"] = pd.to_numeric(df["Hodnota"], errors='coerce').fillna(0).astype(int)
+    # Zabezpečíme, aby ID bolo číslo kvôli sortovaniu
+    df["ID"] = df["ID"].astype(int)
     return df[cols]
 
-# --- MOTOR PRE DYNAMICKÝ PREPOČET (S OŠETRENÍM PRETEČENIA) ---
-def recalculate_logic(df):
+# --- MOTOR PRE DYNAMICKÝ PREPOČET ---
+def recalculate_all_data(df):
     if df.empty:
         return df
     
-    # Zoradenie: 1. Dátum, 2. Čas, 3. Hodnota
-    # Toto zabezpečí správne poradie aj pri pretečení počítadla cez polnoc/cez nulu
-    df = df.sort_values(by=["Dátum", "Čas", "Hodnota"]).reset_index(drop=True)
+    # 1. Oprava chýbajúcich ID (ak niekto pridal riadok v tabuľke manuálne)
+    if df["ID"].isnull().any() or (df["ID"] == 0).any():
+        for idx in df.index:
+            if pd.isnull(df.at[idx, "ID"]) or df.at[idx, "ID"] == 0:
+                # Vytvoríme ID z dátumu a času daného riadku
+                try:
+                    dt_str = f"{df.at[idx, 'Dátum']} {df.at[idx, 'Čas']}"
+                    dt_obj = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                    df.at[idx, "ID"] = int(dt_obj.timestamp())
+                except:
+                    df.at[idx, "ID"] = int(datetime.now().timestamp())
+
+    # 2. Zoradenie podľa času (Vloženie medzi riadky)
+    df = df.sort_values(by=["Dátum", "Čas", "ID"]).reset_index(drop=True)
     
+    # 3. Prepočet minút
     new_counts = []
     for i in range(len(df)):
         if i == 0:
             new_counts.append(0) 
         else:
-            aktualna = int(df.at[i, "Hodnota"])
-            predchadzajuca = int(df.at[i-1, "Hodnota"])
-            
-            rozdiel = aktualna - predchadzajuca
-            
-            # DETEKCIA PRETEČENIA (napr. 9998 -> 0002)
-            # Ak je nová hodnota menšia o viac ako 5000, predpokladáme, že počítadlo "pretočilo"
-            if rozdiel < -5000:
-                rozdiel += 10000
-            elif rozdiel < 0:
-                # Ak je to malý skok dozadu (chyba v zápise), dáme 0, aby to neskazilo sumár
-                rozdiel = 0
-                
-            new_counts.append(rozdiel)
+            try:
+                aktualna = int(df.at[i, "Hodnota"])
+                predchadzajuca = int(df.at[i-1, "Hodnota"])
+                rozdiel = aktualna - predchadzajuca
+                if rozdiel < 0: rozdiel += 10000
+                new_counts.append(rozdiel)
+            except:
+                new_counts.append(0)
             
     df["Počet"] = new_counts
     return df
@@ -70,7 +77,7 @@ if 'form_reset_key' not in st.session_state:
     st.session_state.form_reset_key = 0
 
 def reset_and_save(df):
-    df = recalculate_logic(df)
+    df = recalculate_all_data(df)
     df.to_csv(DB_FILE, index=False)
     st.session_state.df_logs = df
     st.session_state.form_reset_key += 1
@@ -80,89 +87,88 @@ zoznam_mien = load_names()
 
 st.title("⛷️ Minúty 2026")
 
-# --- FORMULÁR ---
+# --- FORMULÁR (Štandardný zápis) ---
 with st.container(border=True):
     st.subheader("➕ Nový záznam")
     k = st.session_state.form_reset_key
     
     c1, c2, c3 = st.columns([2, 2, 2])
-    with c1: d_z = st.date_input("Dátum", date.today(), key=f"d_{k}")
-    with c2: t_z = st.time_input("Čas", datetime.now().time(), key=f"t_{k}")
-    with c3: vyb = st.selectbox("Meno", ["---"] + zoznam_mien + ["+ Nové meno"], key=f"s_{k}")
+    with c1: dat_z = st.date_input("Dátum", date.today(), key=f"d_{k}")
+    with c2: cas_z = st.time_input("Čas", datetime.now().time(), key=f"t_{k}")
+    with c3: vyb_m = st.selectbox("Meno", ["---"] + zoznam_mien + ["+ Nové meno"], key=f"s_{k}")
     
     f_name = ""
-    if vyb == "+ Nové meno":
-        f_name = st.text_input("✍️ Meno nového lyžiara:", key=f"n_{k}").strip()
+    if vyb_m == "+ Nové meno":
+        f_name = st.text_input("✍️ Napíš meno:", key=f"nm_{k}").strip()
     else:
-        f_name = vyb
+        f_name = vyb_m
 
-    st.divider()
-    
     ch1, ch2 = st.columns(2)
-    with ch1:
-        hodn = st.number_input("Stav počítadla (4 miesta)", 0, 9999, step=1, key=f"v_{k}")
+    with ch1: akt_h = st.number_input("Stav počítadla", 0, 9999, step=1, key=f"v_{k}")
     with ch2:
         st.write("⛽ Tankovanie")
         t20, t40 = st.checkbox("20 L", key=f"t2_{k}"), st.checkbox("40 L", key=f"t4_{k}")
 
     if st.button("🚀 ULOŽIŤ ZÁZNAM", use_container_width=True, type="primary"):
         if f_name in ["---", ""]:
-            st.error("⚠️ Zadaj meno!")
+            st.error("⚠️ Vyber meno!")
         else:
-            if vyb == "+ Nové meno": save_new_name(f_name)
-            litrov = (20 if t20 else 0) + (40 if t40 else 0)
-            novy = {
-                "ID": int(datetime.now().timestamp()), 
-                "Dátum": d_z.strftime("%Y-%m-%d"), 
-                "Čas": t_z.strftime("%H:%M"), 
-                "Meno": f_name, 
-                "Hodnota": hodn, 
-                "Počet": 0, 
-                "Litre": litrov
-            }
-            reset_and_save(pd.concat([st.session_state.df_logs, pd.DataFrame([novy])], ignore_index=True))
+            if vyb_m == "+ Nové meno": save_new_name(f_name)
+            l = (20 if t20 else 0) + (40 if t40 else 0)
+            c_dt = datetime.combine(dat_z, cas_z)
+            n_riadok = {"ID": int(c_dt.timestamp()), "Dátum": dat_z.strftime("%Y-%m-%d"), "Čas": cas_z.strftime("%H:%M"), "Meno": f_name, "Hodnota": akt_h, "Počet": 0, "Litre": l}
+            reset_and_save(pd.concat([st.session_state.df_logs, pd.DataFrame([n_riadok])], ignore_index=True))
 
-# --- HISTÓRIA ---
+# --- HISTÓRIA (Teraz s možnosťou pridávať riadky priamo v tabuľke) ---
 st.divider()
-st.subheader("🕒 História")
+st.subheader("🕒 História a rýchle opravy")
+st.write("💾 *Tip: Ak chceš vložiť chýbajúci záznam, klikni na tlačidlo pod tabuľkou, vyplň ho a daj Uložiť.*")
 
-zvoleny_den = st.date_input("Zobraziť deň:", date.today())
-s_datum = zvoleny_den.strftime("%Y-%m-%d")
+z_dat = st.date_input("Filter dňa:", date.today(), key="h_cal")
+s_dat = z_dat.strftime("%Y-%m-%d")
 
+# Príprava dát pre editor
 f_df = st.session_state.df_logs.copy()
-f_df = f_df.sort_values(by=["Dátum", "Čas", "Hodnota"], ascending=[False, False, False])
+f_df = f_df.sort_values(by=["Dátum", "Čas", "ID"], ascending=False)
 f_df["Zmazať"] = False
 
-mask = f_df["Dátum"] == s_datum
-if not f_df[mask].empty:
-    ed_df = st.data_editor(
-        f_df[mask][["Čas", "Meno", "Hodnota", "Počet", "Litre", "Zmazať"]],
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic"
-    )
+mask = f_df["Dátum"] == s_dat
+display_cols = ["Čas", "Meno", "Hodnota", "Počet", "Litre", "Zmazať"]
+
+# EDITOR S DYNAMICKÝMI RIADKAMI
+edited_df_view = st.data_editor(
+    f_df[mask][display_cols],
+    use_container_width=True,
+    num_rows="dynamic", # TOTO UMOŽNÍ PRIDÁVAŤ RIADKY CEZ TLAČIDLO (+)
+    hide_index=True,
+    key="editor"
+)
+
+if st.button("💾 ULOŽIŤ ZMENY V HISTÓRII", use_container_width=True):
+    # 1. Zoberieme všetky riadky, ktoré NIE SÚ z dnešného zobrazenia (ostatné dni)
+    other_days = f_df[~mask].drop(columns=["Zmazať"])
     
-    if st.button("💾 ULOŽIŤ ZMENY"):
-        ostatne = f_df[~mask].drop(columns=["Zmazať"])
-        upravene = ed_df[ed_df["Zmazať"] == False].drop(columns=["Zmazať"])
-        upravene["Dátum"] = s_datum
-        # Oprava chýbajúcich stĺpcov pri manuálnom pridaní riadku
-        if "ID" not in upravene.columns:
-            upravene["ID"] = [int(datetime.now().timestamp()) + i for i in range(len(upravene))]
-        
-        reset_and_save(pd.concat([ostatne, upravene], ignore_index=True))
-else:
-    st.info("Žiadne dáta pre tento deň.")
+    # 2. Zoberieme upravené dáta z editora
+    new_day_data = edited_df_view[edited_df_view["Zmazať"] == False].drop(columns=["Zmazať"])
+    new_day_data["Dátum"] = s_dat # Zabezpečíme, aby mali správny dátum
+    
+    # 3. Spojíme a prepočítame
+    reset_and_save(pd.concat([other_days, new_day_data], ignore_index=True))
 
 # --- SUMÁR ---
-z_mes = zvoleny_den.strftime("%Y-%m")
+st.divider()
+z_mes = z_dat.strftime("%Y-%m")
 df_m = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_mes)]
 if not df_m.empty:
-    st.divider()
-    sum_df = df_m.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
-    st.subheader(f"🏆 Sumár za mesiac {z_mes}")
+    sum_df = df_m.groupby("Meno")[["Počet", "Litre"]].sum().sort_values(by="Počet", ascending=False).reset_index()
+    st.subheader(f"🏆 Králi mesiaca ({z_mes})")
+    top_3 = sum_df.head(3)
+    p = [top_3.iloc[i] if i < len(top_3) else None for i in range(3)]
+    n, m = [x['Meno'] if x is not None else "" for x in p], [int(x['Počet']) if x is not None else 0 for x in p]
+    pod_html = f"""<div style="display: flex; align-items: flex-end; justify-content: center; height: 100px;"><div style="text-align: center; margin: 0 5px;">{n[1]}<br><div style="background: silver; width: 40px; height: 40px;">2</div>{m[1]}m</div><div style="text-align: center; margin: 0 5px;">👑{n[0]}<br><div style="background: gold; width: 40px; height: 60px;">1</div>{m[0]}m</div><div style="text-align: center; margin: 0 5px;">{n[2]}<br><div style="background: #cd7f32; width: 40px; height: 30px;">3</div>{m[2]}m</div></div>"""
+    st.markdown(pod_html, unsafe_allow_html=True)
     st.table(sum_df)
 
 with st.sidebar:
     st.header("📥 Export")
-    st.download_button("Export CSV", st.session_state.df_logs.to_csv(index=False).encode('utf-8'), "lyziari.csv", "text/csv")
+    st.download_button("Záloha (CSV)", st.session_state.df_logs.to_csv(index=False).encode('utf-8'), "lyziari.csv", "text/csv", use_container_width=True)

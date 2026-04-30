@@ -28,55 +28,60 @@ def get_data():
     df = pd.read_csv(DB_FILE)
     df["Dátum"] = df["Dátum"].astype(str)
     df["Hodnota"] = pd.to_numeric(df["Hodnota"], errors='coerce').fillna(0).astype(int)
-    return df[[c for c in cols if c in df.columns]]
+    # Zabezpečíme, aby sme mali všetky stĺpce
+    for c in cols:
+        if c not in df.columns:
+            df[c] = 0 if c in ["Hodnota", "Počet", "Litre", "ID"] else ""
+    return df[cols]
 
-# --- OPRAVENÁ LOGIKA PREPOČTU (BEZ KEYERROR) ---
+# --- TOTÁLNE STABILNÁ LOGIKA PREPOČTU ---
 def recalculate_logic(df):
     if df.empty:
         return df
     
-    # 1. Vyčistenie a základné zoradenie
+    # 1. Reset indexu a zoradenie
     df = df.reset_index(drop=True)
     
-    # 2. Smart zoradenie v rámci dňa (ošetrenie skoku 990 -> 010)
+    # Smart zoradenie v rámci dňa
     def smart_sort_day(group):
         group = group.sort_values("Hodnota").reset_index(drop=True)
         break_point = -1
+        # Hľadáme skok (napr. 990 -> 010)
         for i in range(1, len(group)):
-            # Ak nájdeme skok z vysokej na nízku hodnotu
             if group.loc[i-1, "Hodnota"] > 900 and group.loc[i, "Hodnota"] < 100:
                 break_point = i
                 break
         if break_point != -1:
-            # Presunieme všetko od bodu zlomu na koniec dňa
             return pd.concat([group.iloc[:break_point], group.iloc[break_point:]]).reset_index(drop=True)
         return group
 
-    # Aplikujeme smart zoradenie na každý deň samostatne
     df = df.groupby("Dátum", group_keys=False).apply(smart_sort_day).reset_index(drop=True)
     
-    # 3. Výpočet minút (Počet) pomocou .iloc (čisté poradie riadkov)
-    new_counts = [0] * len(df)
+    # 2. Výpočet pomocou listov (predchádza KeyError 'Dátum')
+    datumi = df["Dátum"].tolist()
+    hodnoty = df["Hodnota"].tolist()
+    novy_pocet = [0] * len(df)
+    
     for i in range(1, len(df)):
-        row_curr = df.iloc[i]
-        row_prev = df.iloc[i-1]
-        
-        if row_curr["Dátum"] == row_prev["Dátum"]:
-            val_curr = int(row_curr["Hodnota"])
-            val_prev = int(row_prev["Hodnota"])
+        # Ak je rovnaký deň ako predchádzajúci riadok
+        if datumi[i] == datumi[i-1]:
+            akt = hodnoty[i]
+            pre = hodnoty[i-1]
             
-            if val_curr < val_prev:
-                if val_prev > 900 and val_curr < 100:
-                    rozdiel = (1000 - val_prev) + val_curr
+            if akt < pre:
+                # Ošetrenie pretečenia počítadla
+                if pre > 900 and akt < 100:
+                    rozdiel = (1000 - pre) + akt
                 else:
                     rozdiel = 0
             else:
-                rozdiel = val_curr - val_prev
-            new_counts[i] = rozdiel
-        else:
-            new_counts[i] = 0
+                rozdiel = akt - pre
             
-    df["Počet"] = new_counts
+            novy_pocet[i] = rozdiel
+        else:
+            novy_pocet[i] = 0
+            
+    df["Počet"] = novy_pocet
     return df
 
 # --- INICIALIZÁCIA ---
@@ -110,7 +115,7 @@ with st.container(border=True):
     st.divider()
     ch1, ch2 = st.columns(2)
     with ch1:
-        hodn = st.number_input("Stav počítadla (posledné 3 číslice)", 0, 999, step=1, key=f"v_{k}", format="%03d")
+        hodn = st.number_input("Stav počítadla (3 miesta)", 0, 999, step=1, key=f"v_{k}", format="%03d")
     with ch2:
         st.write("⛽ Tankovanie")
         t20, t40 = st.checkbox("20 L", key=f"t2_{k}"), st.checkbox("40 L", key=f"t4_{k}")
@@ -129,16 +134,13 @@ st.subheader("🕒 História")
 zvoleny_den = st.date_input("Zobraziť deň:", date.today())
 s_datum = zvoleny_den.strftime("%Y-%m-%d")
 
-# Načítame aktuálne dáta a pridáme stĺpec pre mazanie
 f_df = st.session_state.df_logs.copy()
-f_df["Zmazať"] = False
-
-# Filtrujeme dáta pre zvolený deň
 mask = f_df["Dátum"] == s_datum
 day_data = f_df[mask].copy()
 
 if not day_data.empty:
-    # zoradíme podľa ID aby sme videli poradie zápisu
+    day_data["Zmazať"] = False
+    # Zoradíme podľa ID (času zápisu)
     day_data = day_data.sort_values("ID")
     
     ed_df = st.data_editor(
@@ -146,23 +148,19 @@ if not day_data.empty:
         use_container_width=True, 
         hide_index=True,
         column_config={
-            "ID": None, # Skryjeme ID pred používateľom
+            "ID": None, 
             "Hodnota": st.column_config.NumberColumn(format="%03d")
-        }
+        },
+        key=f"editor_{s_datum}"
     )
     
     if st.button("💾 ULOŽIŤ ZMENY"):
-        # 1. Zoberieme všetky záznamy z iných dní
-        ostatne_dni = f_df[f_df["Dátum"] != s_datum].drop(columns=["Zmazať"])
+        ostatne = f_df[f_df["Dátum"] != s_datum].copy()
+        upravene = ed_df[ed_df["Zmazať"] == False].copy()
+        upravene = upravene.drop(columns=["Zmazať"])
+        upravene["Dátum"] = s_datum
         
-        # 2. Zoberieme upravené záznamy z dnešného dňa, ktoré neboli označené na zmazanie
-        upravene_dnes = ed_df[ed_df["Zmazať"] == False].copy()
-        upravene_dnes = upravene_dnes.drop(columns=["Zmazať"])
-        upravene_dnes["Dátum"] = s_datum # Vrátime dátum
-        
-        # Spojíme a uložíme
-        novy_celkovy_df = pd.concat([ostatne_dni, upravene_dnes], ignore_index=True)
-        reset_and_save(novy_celkovy_df)
+        reset_and_save(pd.concat([ostatne, upravene], ignore_index=True))
 else:
     st.info("Žiadne dáta pre tento deň.")
 
@@ -170,7 +168,6 @@ else:
 st.divider()
 col_m, col_y = st.columns(2)
 
-# MESAČNÝ SUMÁR
 with col_m:
     z_mes = zvoleny_den.strftime("%Y-%m")
     df_m = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_mes)].copy()
@@ -178,10 +175,10 @@ with col_m:
     if not df_m.empty:
         sum_m = df_m.groupby("Meno")["Počet"].sum().sort_values(ascending=False).reset_index()
         sum_m.index = sum_m.index + 1
+       
         st.table(sum_m)
     else: st.write("Žiadne dáta.")
 
-# ROČNÝ SUMÁR
 with col_y:
     z_rok = "2026"
     df_y = st.session_state.df_logs[st.session_state.df_logs["Dátum"].str.startswith(z_rok)].copy()
